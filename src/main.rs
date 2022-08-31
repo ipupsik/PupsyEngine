@@ -8,6 +8,7 @@ use std::mem::align_of;
 
 mod lib;
 
+
 #[derive(Clone, Debug, Copy)]
 struct Vertex {
     pos: [f32; 4],

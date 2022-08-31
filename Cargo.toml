@@ -8,5 +8,5 @@ edition = "2021"
 [dependencies]
 winit = "0.26"
 image = "0.23"
-ash = { path = "../ash/ash", default-features = false, features = ["linked", "debug"] }
-ash-window = { path = "../ash/ash-window" }
+ash = { path = "ash/ash", default-features = false, features = ["linked", "debug"] }
+ash-window = { path = "ash/ash-window" }
