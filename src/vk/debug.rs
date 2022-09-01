@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::ptr;
 
 use crate::vk::constants;
-use crate::utility::platforms;
+use crate::vk::platforms;
 use crate::utility::debug;
 use crate::utility::tools;
 
@@ -35,7 +35,7 @@ pub fn setup_debug_utils(entry: &ash::Entry, instance: &ash::Instance) -> (ash::
     }
 }
 
-fn debug_messanger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT<'static> {
+fn debug_messanger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
     vk::DebugUtilsMessengerCreateInfoEXT {
         s_type: vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
         p_next: ptr::null(),
@@ -48,8 +48,7 @@ fn debug_messanger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT<'static
             | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
             | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
         pfn_user_callback: Some(debug::vulkan_debug_utils_callback),
-        p_user_data: ptr::null_mut(),
-        _marker: PhantomData
+        p_user_data: ptr::null_mut()
     }
 }
 

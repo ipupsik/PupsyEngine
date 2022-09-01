@@ -35,8 +35,7 @@ pub unsafe fn create_surface(
         p_next: ptr::null(),
         flags: Default::default(),
         hinstance,
-        hwnd: hwnd as *const c_void,
-        _marker: std::marker::PhantomData
+        hwnd: hwnd as *const c_void
     };
     let win32_surface_loader = Win32Surface::new(entry, instance);
     win32_surface_loader.create_win32_surface(&win32_create_info, None)

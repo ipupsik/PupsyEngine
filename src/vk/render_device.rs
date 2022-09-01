@@ -1,42 +1,58 @@
 use ash::vk;
 use ash::vk::ValidationCacheCreateInfoEXT;
+use ash;
+
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr;
-
-use ash;
+use std::collections::HashSet;
 
 use std::os::raw::c_char;
 
 use crate::vk::constants;
 use crate::utility::constants as global_constants;
-use crate::utility::platforms;
+use crate::vk::platforms;
 use crate::vk::debug;
 use crate::utility::tools;
 
 use crate::rhi::render_device;
 use crate::rhi::window;
 
-pub struct VkRenderDevice {
-    instance: ash::Instance,
-    entry: ash::Entry,
-    debug_utils_loader: ash::extensions::ext::DebugUtils,
-    debug_messager: vk::DebugUtilsMessengerEXT,
-    physical_device: vk::PhysicalDevice,
-    device: ash::Device,
-    graphics_queue: vk::Queue,
-    present_queue: vk::Queue
-}
+use crate::vk::swap_chain;
 
-struct QueueFamilyIndices {
-    graphics_family: Option<u32>,
-    present_family: Option<u32>,
+use super::swap_chain::VkSpawChain;
+
+pub struct QueueFamilyIndices {
+    pub graphics_family: Option<u32>,
+    pub present_family: Option<u32>,
 }
 
 impl QueueFamilyIndices {
+    pub fn new() -> QueueFamilyIndices {
+        QueueFamilyIndices {
+            graphics_family: None,
+            present_family: None,
+        }
+    }
+
     pub fn is_complete(&self) -> bool {
         self.graphics_family.is_some()
     }
+}
+pub struct VkRenderDevice {
+    instance: ash::Instance,
+    entry: ash::Entry,
+
+    debug_utils_loader: ash::extensions::ext::DebugUtils,
+    debug_messager: vk::DebugUtilsMessengerEXT,
+
+    physical_device: vk::PhysicalDevice,
+    device: ash::Device,
+
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
+
+    swapchain: swap_chain::VkSpawChain,
 }
 
 impl render_device::RenderDevice for VkRenderDevice {
@@ -46,7 +62,7 @@ impl render_device::RenderDevice for VkRenderDevice {
 impl VkRenderDevice
 {
     pub fn new (window: &window::Window) -> VkRenderDevice {
-        let entry = ash::Entry::default();
+        let entry = ash::Entry::new();
         let instance = VkRenderDevice::create_instance(&entry);
         let (debug_units_loader, debug_messager) = debug::setup_debug_utils(&entry, &instance);
         let surface = VkRenderDevice::create_surface(&entry, &instance, window);
@@ -63,6 +79,8 @@ impl VkRenderDevice
             logical_device.get_device_queue(indices.graphics_family.unwrap(), 0)
         };
 
+        let swap_chain = VkSpawChain::create_swapchain(&instance, &logical_device, physical_device, &surface, &indices);
+
         VkRenderDevice {
             entry: entry,
             instance: instance,
@@ -71,7 +89,8 @@ impl VkRenderDevice
             physical_device: physical_device,
             device: logical_device,
             graphics_queue: graphics_queue,
-            present_queue: present_queue
+            present_queue: present_queue,
+            swapchain: swap_chain
         }
     }
 
@@ -81,7 +100,7 @@ impl VkRenderDevice
         window: &window::Window,
     ) -> VkSurface {
         let surface = unsafe {
-            crate::utility::platforms::create_surface(entry, instance, window)
+            crate::vk::platforms::create_surface(entry, instance, window)
                 .expect("Failed to create surface.")
         };
         let surface_loader = ash::extensions::khr::Surface::new(entry, instance);
@@ -106,8 +125,7 @@ impl VkRenderDevice
             p_engine_name: engine_name.as_ptr(),
             application_version: global_constants::APPLICATION_VERSION,
             engine_version: global_constants::ENGINE_VERSION,
-            api_version: constants::API_VERSION,
-            _marker: std::marker::PhantomData
+            api_version: constants::API_VERSION
         };
 
         let extension_names = platforms::required_extension_names();
@@ -120,8 +138,7 @@ impl VkRenderDevice
             pp_enabled_layer_names: ptr::null(),
             enabled_layer_count: 0,
             pp_enabled_extension_names: extension_names.as_ptr(),
-            enabled_extension_count: extension_names.len() as u32,
-            _marker: std::marker::PhantomData
+            enabled_extension_count: extension_names.len() as u32
         };
 
         let instance: ash::Instance = unsafe {
@@ -163,9 +180,13 @@ impl VkRenderDevice
         surface: &VkSurface
     ) -> bool {
         let device_properties = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_features = unsafe { instance.get_physical_device_features(physical_device) };
         let device_queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+
+        let device_features = unsafe { instance.get_physical_device_features(physical_device) };
+
+        let is_device_extension_supported =
+            VkRenderDevice::check_device_extension_support(instance, physical_device);
 
         let device_type = match device_properties.device_type {
             vk::PhysicalDeviceType::CPU => "Cpu",
@@ -242,7 +263,53 @@ impl VkRenderDevice
 
         let indices = VkRenderDevice::find_queue_family(instance, physical_device, surface);
 
-        return indices.is_complete();
+        let is_queue_family_supported = indices.is_complete();
+
+        let is_swapchain_supported = if is_device_extension_supported {
+            let swapchain_support = VkSpawChain::query_swapchain_support(physical_device, &surface);
+            !swapchain_support.formats.is_empty() && !swapchain_support.present_modes.is_empty()
+        } else {
+            false
+        };
+
+        return is_queue_family_supported
+            && is_device_extension_supported
+            && is_swapchain_supported;
+    }
+
+    fn check_device_extension_support(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> bool {
+        let available_extensions = unsafe {
+            instance
+                .enumerate_device_extension_properties(physical_device)
+                .expect("Failed to get device extension properties.")
+        };
+
+        let mut available_extension_names = vec![];
+
+        println!("\tAvailable Device Extensions: ");
+        for extension in available_extensions.iter() {
+            let extension_name = tools::vk_to_string(&extension.extension_name);
+            println!(
+                "\t\tName: {}, Version: {}",
+                extension_name, extension.spec_version
+            );
+
+            available_extension_names.push(extension_name);
+        }
+
+        let mut required_extensions = HashSet::new();
+        for extension in constants::DEVICE_EXTENSIONS.names.iter() {
+            required_extensions.insert(extension.to_string());
+        }
+
+        for extension_name in available_extension_names.iter() {
+            required_extensions.remove(extension_name);
+        }
+
+        return required_extensions.is_empty();
     }
 
     fn find_queue_family(
@@ -276,6 +343,10 @@ impl VkRenderDevice
                     )
             };
 
+            if queue_family.queue_count > 0 && is_present_support.is_ok() {
+                queue_family_indices.present_family = Some(index);
+            }
+
             if queue_family_indices.is_complete() {
                 break;
             }
@@ -301,8 +372,7 @@ impl VkRenderDevice
             flags: vk::DeviceQueueCreateFlags::empty(),
             queue_family_index: indices.graphics_family.unwrap(),
             p_queue_priorities: queue_priorities.as_ptr(),
-            queue_count: queue_priorities.len() as u32,
-            _marker: PhantomData
+            queue_count: queue_priorities.len() as u32
         };
 
         let physical_device_features = vk::PhysicalDeviceFeatures {
@@ -320,6 +390,10 @@ impl VkRenderDevice
             .map(|layer_name| layer_name.as_ptr())
             .collect();
 
+        let enable_extension_names = [
+            ash::extensions::khr::Swapchain::name().as_ptr(), // currently just enable the Swapchain extension.
+        ];
+
         let device_create_info = vk::DeviceCreateInfo {
             s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
             p_next: ptr::null(),
@@ -336,10 +410,9 @@ impl VkRenderDevice
             } else {
                 ptr::null()
             },
-            enabled_extension_count: 0,
-            pp_enabled_extension_names: ptr::null(),
-            p_enabled_features: &physical_device_features,
-            _marker: PhantomData
+            enabled_extension_count: enable_extension_names.len() as u32,
+            pp_enabled_extension_names: enable_extension_names.as_ptr(),
+            p_enabled_features: &physical_device_features
         };
 
         let device = unsafe {
@@ -363,6 +436,6 @@ impl VkRenderDevice
 }
 
 pub struct VkSurface {
-    surface_loader: ash::extensions::khr::Surface,
-    surface: vk::SurfaceKHR,
+    pub surface_loader: ash::extensions::khr::Surface,
+    pub surface: vk::SurfaceKHR,
 }
