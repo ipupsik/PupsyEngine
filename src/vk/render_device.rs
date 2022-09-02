@@ -62,7 +62,9 @@ impl render_device::RenderDevice for VkRenderDevice {
 impl VkRenderDevice
 {
     pub fn new (window: &window::Window) -> VkRenderDevice {
-        let entry = ash::Entry::new();
+        let entry = unsafe {
+            ash::Entry::load().unwrap()
+        };
         let instance = VkRenderDevice::create_instance(&entry);
         let (debug_units_loader, debug_messager) = debug::setup_debug_utils(&entry, &instance);
         let surface = VkRenderDevice::create_surface(&entry, &instance, window);
@@ -76,7 +78,7 @@ impl VkRenderDevice
         };
 
         let present_queue = unsafe { 
-            logical_device.get_device_queue(indices.graphics_family.unwrap(), 0)
+            logical_device.get_device_queue(indices.present_family.unwrap(), 0)
         };
 
         let swap_chain = VkSpawChain::create_swapchain(&instance, &logical_device, physical_device, &surface, &indices);
