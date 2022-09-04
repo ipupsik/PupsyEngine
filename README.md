@@ -44,9 +44,9 @@
     * Depth Stencil State ()
     * Color Blending state (как смешиваются цвета в framebuffer после отработки фрагментного шейдера)
     * Pipeline Layout (сюда передаются global constants данные для шейдера)
-    * 
 
-    #### 8.1. Создаем Render Passes (https://vulkan-tutorial.com/Drawing_a_triangle/Graphics_pipeline_basics/Render_passes)
+        #### 8.1. Создаем Render Passes (https://vulkan-tutorial.com/Drawing_a_triangle/Graphics_pipeline_basics/Render_passes)
+
         * AttachmentDescription (Определяем поведение отображение во framebuffer после прохождния треугольника через пайплайн ())
         * Subpasses and Attachment references ()
             * SubpassDescription / AttachmentReference ()

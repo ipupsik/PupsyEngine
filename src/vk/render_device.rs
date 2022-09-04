@@ -58,6 +58,7 @@ pub struct VkRenderDevice {
 
     swapchain: swap_chain::VkSpawChain,
     swapchain_image_views:  Vec<vk::ImageView>,
+    swapchain_framebuffers: Vec<vk::Framebuffer>,
 
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
@@ -96,6 +97,8 @@ impl VkRenderDevice
         let render_pass = VkRenderDevice::create_render_pass(&logical_device, swap_chain.swapchain_format);
         let (pipeline, pipeline_layout) = VkRenderDevice::create_graphics_pipeline(&logical_device, &swap_chain, render_pass);
 
+        let framebuffers = VkRenderDevice::create_framebuffers(&logical_device, render_pass, &swapchain_image_views, &swap_chain.swapchain_extent);
+
         VkRenderDevice {
             entry: entry,
             instance: instance,
@@ -111,7 +114,9 @@ impl VkRenderDevice
 
             render_pass: render_pass,
             pipeline_layout: pipeline_layout,
-            graphics_pipeline: pipeline
+            graphics_pipeline: pipeline,
+
+            swapchain_framebuffers: framebuffers,
         }
     }
 
@@ -443,6 +448,41 @@ impl VkRenderDevice
         };
 
         device
+    }
+
+    fn create_framebuffers(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        image_views: &Vec<vk::ImageView>,
+        swapchain_extent: &vk::Extent2D
+    ) -> Vec<vk::Framebuffer> {
+        let mut framebuffers = vec![];
+
+        for &image_view in image_views.iter() {
+            let attachments = [image_view];
+
+            let framebuffer_create_info = vk::FramebufferCreateInfo {
+                s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::FramebufferCreateFlags::empty(),
+                render_pass,
+                attachment_count: attachments.len() as u32,
+                p_attachments: attachments.as_ptr(),
+                width: swapchain_extent.width,
+                height: swapchain_extent.height,
+                layers: 1,
+            };
+
+            let framebuffer = unsafe {
+                device
+                    .create_framebuffer(&framebuffer_create_info, None)
+                    .expect("Failed to create Framebuffer!")
+            };
+
+            framebuffers.push(framebuffer);
+        }
+
+        framebuffers
     }
 
     fn create_render_pass(
