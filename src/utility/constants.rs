@@ -8,3 +8,5 @@ pub const WINDOW_HEIGHT: u32 = 600;
 
 pub const WINDOW_TITLE: &'static str = "Pupsy Window";
 pub const ENGINE_TITLE: &'static str = "Pupsy Engine";
+
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;

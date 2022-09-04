@@ -20,13 +20,15 @@ use crate::rhi::window;
 use super::render_device::VkSurface;
 
 pub struct VkSpawChain {
-    swapchain_loader: ash::extensions::khr::Swapchain,
-    swapchain: vk::SwapchainKHR,
+    pub swapchain_loader: ash::extensions::khr::Swapchain,
+    pub swapchain: vk::SwapchainKHR,
 
     swapchain_images: Vec<vk::Image>,
     pub swapchain_format: vk::Format,
     pub swapchain_extent: vk::Extent2D,
-    swapchain_image_views: Vec<vk::ImageView>,
+
+    swapchain_image_views:  Vec<vk::ImageView>,
+    swapchain_framebuffers: Vec<vk::Framebuffer>,
 }
 
 pub struct SwapChainSupportDetail {
@@ -49,8 +51,8 @@ impl VkSpawChain {
         let present_mode = VkSpawChain::choose_swapchain_present_mode(&swapchain_support.present_modes);
         let extent = VkSpawChain::choose_swapchain_extent(&swapchain_support.capabilities);
 
-        let mut image_count = swapchain_support.capabilities.min_image_count + 1;
-        image_count = if swapchain_support.capabilities.max_image_count > 0 {
+        let image_count = swapchain_support.capabilities.min_image_count + 1;
+        let image_count = if swapchain_support.capabilities.max_image_count > 0 {
             image_count.min(swapchain_support.capabilities.max_image_count)
         }
         else {
@@ -111,8 +113,44 @@ impl VkSpawChain {
             swapchain_format: surface_format.format,
             swapchain_extent: extent,
             swapchain_images: swapchain_images,
+            swapchain_framebuffers: vec![],
             swapchain_image_views: vec![],
         }
+    }
+
+    pub fn create_framebuffers(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        image_views: &Vec<vk::ImageView>,
+        swapchain_extent: &vk::Extent2D
+    ) -> Vec<vk::Framebuffer> {
+        let mut framebuffers = vec![];
+
+        for &image_view in image_views.iter() {
+            let attachments = [image_view];
+
+            let framebuffer_create_info = vk::FramebufferCreateInfo {
+                s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::FramebufferCreateFlags::empty(),
+                render_pass,
+                attachment_count: attachments.len() as u32,
+                p_attachments: attachments.as_ptr(),
+                width: swapchain_extent.width,
+                height: swapchain_extent.height,
+                layers: 1,
+            };
+
+            let framebuffer = unsafe {
+                device
+                    .create_framebuffer(&framebuffer_create_info, None)
+                    .expect("Failed to create Framebuffer!")
+            };
+
+            framebuffers.push(framebuffer);
+        }
+
+        framebuffers
     }
 
     pub fn create_image_views(&self,
@@ -236,7 +274,19 @@ impl VkSpawChain {
         }
     }
 
-    pub fn drop(&self) {
+    pub fn cleanup_swapchain(&self, device: &ash::Device) {
+        unsafe {
+            for &framebuffer in self.swapchain_framebuffers.iter() {
+                device.destroy_framebuffer(framebuffer, None);
+            }
+
+            for &image_view in self.swapchain_image_views.iter() {
+                device.destroy_image_view(image_view, None);
+            }
+        }
+    }
+
+    pub fn destroy_swapchain(&self) {
         unsafe {
             self.swapchain_loader.destroy_swapchain(self.swapchain, None);
         }

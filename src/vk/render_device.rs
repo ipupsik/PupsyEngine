@@ -3,14 +3,12 @@ use ash::vk::ValidationCacheCreateInfoEXT;
 use ash;
 
 use std::ffi::CString;
-use std::marker::PhantomData;
 use std::path::Path;
 use std::ptr;
 use std::collections::HashSet;
 
 use std::os::raw::c_char;
 
-use crate::rhi::render_device::RenderDevice;
 use crate::vk::constants;
 use crate::utility::constants as global_constants;
 use crate::vk::platforms;
@@ -27,6 +25,12 @@ use super::swap_chain::VkSpawChain;
 pub struct QueueFamilyIndices {
     pub graphics_family: Option<u32>,
     pub present_family: Option<u32>,
+}
+
+pub struct SyncObjects {
+    pub image_available_semaphores: Vec<vk::Semaphore>,
+    pub render_finished_semaphores: Vec<vk::Semaphore>,
+    pub inflight_fences: Vec<vk::Fence>,
 }
 
 impl QueueFamilyIndices {
@@ -51,18 +55,24 @@ pub struct VkRenderDevice {
     debug_messager: vk::DebugUtilsMessengerEXT,
 
     physical_device: vk::PhysicalDevice,
-    device: ash::Device,
+    pub device: ash::Device,
 
-    graphics_queue: vk::Queue,
-    present_queue: vk::Queue,
+    pub graphics_queue: vk::Queue,
+    pub present_queue: vk::Queue,
 
-    swapchain: swap_chain::VkSpawChain,
-    swapchain_image_views:  Vec<vk::ImageView>,
-    swapchain_framebuffers: Vec<vk::Framebuffer>,
+    indices: QueueFamilyIndices,
+
+    pub swapchain: swap_chain::VkSpawChain,
 
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
-    graphics_pipeline: vk::Pipeline
+    graphics_pipeline: vk::Pipeline,
+    
+    command_pool: vk::CommandPool,
+    pub command_buffers: Vec<vk::CommandBuffer>,
+
+    pub sync_objects: SyncObjects,
+    pub current_frame: usize,
 }
 
 impl render_device::RenderDevice for VkRenderDevice {
@@ -79,10 +89,8 @@ impl VkRenderDevice
         let (debug_units_loader, debug_messager) = debug::setup_debug_utils(&entry, &instance);
         let surface = VkRenderDevice::create_surface(&entry, &instance, window);
         let physical_device = VkRenderDevice::pick_physical_device(&instance, &surface);
-        let logical_device = VkRenderDevice::create_logical_device(&instance, physical_device, &constants::VALIDATION, &surface);
-
-        let indices = VkRenderDevice::find_queue_family(&instance, physical_device, &surface);
-
+        let (logical_device, indices) = VkRenderDevice::create_logical_device(&instance, physical_device, &constants::VALIDATION, &surface);
+        
         let graphics_queue = unsafe { 
             logical_device.get_device_queue(indices.graphics_family.unwrap(), 0)
         };
@@ -97,7 +105,19 @@ impl VkRenderDevice
         let render_pass = VkRenderDevice::create_render_pass(&logical_device, swap_chain.swapchain_format);
         let (pipeline, pipeline_layout) = VkRenderDevice::create_graphics_pipeline(&logical_device, &swap_chain, render_pass);
 
-        let framebuffers = VkRenderDevice::create_framebuffers(&logical_device, render_pass, &swapchain_image_views, &swap_chain.swapchain_extent);
+        let framebuffers = VkSpawChain::create_framebuffers(&logical_device, render_pass, &swapchain_image_views, &swap_chain.swapchain_extent);
+
+        let command_pool = VkRenderDevice::create_command_pool(&logical_device, &indices);
+        let command_buffers = VkRenderDevice::create_command_buffers(
+            &logical_device,
+            command_pool,
+            pipeline,
+            &framebuffers,
+            render_pass,
+            swap_chain.swapchain_extent,
+        );
+
+        let sync_ojbects = VkRenderDevice::create_sync_objects(&logical_device);
 
         VkRenderDevice {
             entry: entry,
@@ -107,17 +127,96 @@ impl VkRenderDevice
             debug_messager: debug_messager,
             physical_device: physical_device,
             device: logical_device,
+
             graphics_queue: graphics_queue,
             present_queue: present_queue,
+            indices: indices,
+
             swapchain: swap_chain,
-            swapchain_image_views: swapchain_image_views,
 
             render_pass: render_pass,
             pipeline_layout: pipeline_layout,
             graphics_pipeline: pipeline,
 
-            swapchain_framebuffers: framebuffers,
+            command_pool: command_pool,
+            command_buffers: command_buffers,
+
+            sync_objects: sync_ojbects,
+            current_frame: 0
         }
+    }
+
+    pub fn recreate_swapchain(&mut self) {
+        unsafe {
+            self.device
+                .device_wait_idle()
+                .expect("Failed to wait device idle")
+        };
+
+        self.cleanup_swapchain_resources();
+
+        self.swapchain = VkSpawChain::create_swapchain(&self.instance, &self.device, self.physical_device, &self.surface, &self.indices);
+
+        let swapchain_image_views = self.swapchain.create_image_views(&self.device);
+
+        self.render_pass = VkRenderDevice::create_render_pass(&self.device, self.swapchain.swapchain_format);
+
+        (self.graphics_pipeline, self.pipeline_layout) = VkRenderDevice::create_graphics_pipeline(&self.device, &self.swapchain, self.render_pass);
+    
+        let framebuffers = VkSpawChain::create_framebuffers(&self.device, self.render_pass, &swapchain_image_views, &self.swapchain.swapchain_extent);
+
+        self.command_buffers = VkRenderDevice::create_command_buffers(
+            &self.device,
+            self.command_pool,
+            self.graphics_pipeline,
+            &framebuffers,
+            self.render_pass,
+            self.swapchain.swapchain_extent,
+        );
+    }
+
+    fn create_sync_objects(device: &ash::Device) -> SyncObjects {
+        let mut sync_objects = SyncObjects {
+            image_available_semaphores: vec![],
+            render_finished_semaphores: vec![],
+            inflight_fences: vec![],
+        };
+
+        let semaphore_create_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::SemaphoreCreateFlags::empty(),
+        };
+
+        let fence_create_info = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::SIGNALED,
+        };
+
+        for _ in 0..global_constants::MAX_FRAMES_IN_FLIGHT {
+            unsafe {
+                let image_available_semaphore = device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .expect("Failed to create Semaphore Object!");
+                let render_finished_semaphore = device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .expect("Failed to create Semaphore Object!");
+                let inflight_fence = device
+                    .create_fence(&fence_create_info, None)
+                    .expect("Failed to create Fence Object!");
+
+                sync_objects
+                    .image_available_semaphores
+                    .push(image_available_semaphore);
+                sync_objects
+                    .render_finished_semaphores
+                    .push(render_finished_semaphore);
+                sync_objects.inflight_fences.push(inflight_fence);
+            }
+        }
+
+        sync_objects
     }
 
     fn create_surface(
@@ -134,6 +233,9 @@ impl VkRenderDevice
         VkSurface {
             surface_loader,
             surface,
+
+            screen_width: global_constants::WINDOW_WIDTH,
+            screen_height: global_constants::WINDOW_HEIGHT,
         }
     }
 
@@ -196,6 +298,8 @@ impl VkRenderDevice
                 }
             }
         }
+
+        println!("\n------------------\n");
 
         result.unwrap()
     }
@@ -388,18 +492,26 @@ impl VkRenderDevice
         physical_device: vk::PhysicalDevice,
         validation: &debug::ValidationInfo,
         surface: &VkSurface
-        ) -> ash::Device {
+        ) -> (ash::Device, QueueFamilyIndices) {
         let indices = VkRenderDevice::find_queue_family(instance, physical_device, surface);
 
+        let mut unique_queue_families = HashSet::new();
+        unique_queue_families.insert(indices.graphics_family.unwrap());
+        unique_queue_families.insert(indices.present_family.unwrap());
+
         let queue_priorities = [1.0_f32];
-        let queue_create_info = vk::DeviceQueueCreateInfo {
-            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: vk::DeviceQueueCreateFlags::empty(),
-            queue_family_index: indices.graphics_family.unwrap(),
-            p_queue_priorities: queue_priorities.as_ptr(),
-            queue_count: queue_priorities.len() as u32
-        };
+        let mut queue_create_infos = vec![];
+        for &queue_family in unique_queue_families.iter() {
+            let queue_create_info = vk::DeviceQueueCreateInfo {
+                s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::DeviceQueueCreateFlags::empty(),
+                queue_family_index: queue_family,
+                p_queue_priorities: queue_priorities.as_ptr(),
+                queue_count: queue_priorities.len() as u32,
+            };
+            queue_create_infos.push(queue_create_info);
+        }
 
         let physical_device_features = vk::PhysicalDeviceFeatures {
             ..Default::default()
@@ -424,8 +536,8 @@ impl VkRenderDevice
             s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceCreateFlags::empty(),
-            queue_create_info_count: 1,
-            p_queue_create_infos: &queue_create_info,
+            queue_create_info_count: queue_create_infos.len() as u32,
+            p_queue_create_infos: queue_create_infos.as_ptr(),
             enabled_layer_count: if validation.is_enable {
                 enable_layer_names.len()
             } else {
@@ -447,42 +559,104 @@ impl VkRenderDevice
                 .expect("Failed to create logical device!")
         };
 
-        device
+        (device, indices)
     }
 
-    fn create_framebuffers(
+    fn create_command_pool(
         device: &ash::Device,
+        queue_families: &QueueFamilyIndices,
+    ) -> vk::CommandPool {
+        let command_pool_create_info = vk::CommandPoolCreateInfo {
+            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandPoolCreateFlags::empty(),
+            queue_family_index: queue_families.graphics_family.unwrap(),
+        };
+
+        unsafe {
+            device
+                .create_command_pool(&command_pool_create_info, None)
+                .expect("Failed to create Command Pool!")
+        }
+    }
+
+    fn create_command_buffers (
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        graphics_pipeline: vk::Pipeline,
+        framebuffers: &Vec<vk::Framebuffer>,
         render_pass: vk::RenderPass,
-        image_views: &Vec<vk::ImageView>,
-        swapchain_extent: &vk::Extent2D
-    ) -> Vec<vk::Framebuffer> {
-        let mut framebuffers = vec![];
+        surface_extent: vk::Extent2D,
+    ) -> Vec<vk::CommandBuffer> {
+        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            command_buffer_count: framebuffers.len() as u32,
+            command_pool: command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+        };
 
-        for &image_view in image_views.iter() {
-            let attachments = [image_view];
+        let command_buffers = unsafe {
+            device
+                .allocate_command_buffers(&command_buffer_allocate_info)
+                .expect("Failed to allocate Command Buffers!")
+        };
 
-            let framebuffer_create_info = vk::FramebufferCreateInfo {
-                s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+        for (i, &command_buffer) in command_buffers.iter().enumerate() {
+            let command_buffer_begin_info = vk::CommandBufferBeginInfo {
+                s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
                 p_next: ptr::null(),
-                flags: vk::FramebufferCreateFlags::empty(),
-                render_pass,
-                attachment_count: attachments.len() as u32,
-                p_attachments: attachments.as_ptr(),
-                width: swapchain_extent.width,
-                height: swapchain_extent.height,
-                layers: 1,
+                p_inheritance_info: ptr::null(),
+                flags: vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
             };
 
-            let framebuffer = unsafe {
+            unsafe {
                 device
-                    .create_framebuffer(&framebuffer_create_info, None)
-                    .expect("Failed to create Framebuffer!")
+                    .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+                    .expect("Failed to begin recording Command Buffer at beginning!");
+            }
+
+            let clear_values = [vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                },
+            }];
+
+            let render_pass_begin_info = vk::RenderPassBeginInfo {
+                s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
+                p_next: ptr::null(),
+                render_pass,
+                framebuffer: framebuffers[i],
+                render_area: vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: surface_extent,
+                },
+                clear_value_count: clear_values.len() as u32,
+                p_clear_values: clear_values.as_ptr(),
             };
 
-            framebuffers.push(framebuffer);
+            unsafe {
+                device.cmd_begin_render_pass(
+                    command_buffer,
+                    &render_pass_begin_info,
+                    vk::SubpassContents::INLINE,
+                );
+                device.cmd_bind_pipeline(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    graphics_pipeline,
+                );
+                device.cmd_draw(command_buffer, 3, 1, 0, 0);
+
+                device.cmd_end_render_pass(command_buffer);
+
+                device
+                    .end_command_buffer(command_buffer)
+                    .expect("Failed to record Command Buffer at Ending!");
+            }
         }
 
-        framebuffers
+        command_buffers
     }
 
     fn create_render_pass(
@@ -550,8 +724,12 @@ impl VkRenderDevice
 
         let fragment_shader_code = VkRenderDevice::read_shader_code(Path::new("src/shaders/spv/09-shader-base.frag.spv"));
 
-        let vert_shader_module = VkRenderDevice::create_shader_module(device, &vertex_shader_code);
-        let frag_shader_module = VkRenderDevice::create_shader_module(device, &fragment_shader_code);
+        let vert_shader_module = VkRenderDevice::create_shader_module(
+            device,
+            vertex_shader_code);
+        let frag_shader_module = VkRenderDevice::create_shader_module(
+            device, 
+            fragment_shader_code);
 
         let main_function_name = CString::new("main").unwrap();
 
@@ -565,9 +743,9 @@ impl VkRenderDevice
                 p_name: main_function_name.as_ptr(),
                 p_specialization_info: ptr::null(),
                 stage: vk::ShaderStageFlags::VERTEX,
-            }, 
+            },
             vk::PipelineShaderStageCreateInfo {
-                // Vertex Shader
+                // Fragment Shader
                 s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
                 p_next: ptr::null(),
                 flags: vk::PipelineShaderStageCreateFlags::empty(),
@@ -669,13 +847,13 @@ impl VkRenderDevice
             stencil_test_enable: vk::FALSE,
             front: stencil_state,
             back: stencil_state,
-            min_depth_bounds: 0.0,
             max_depth_bounds: 1.0,
+            min_depth_bounds: 0.0,
         };
 
         let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState {
             blend_enable: vk::FALSE,
-            color_write_mask: vk::ColorComponentFlags::default(),
+            color_write_mask: vk::ColorComponentFlags::RGBA,
             src_color_blend_factor: vk::BlendFactor::ONE,
             dst_color_blend_factor: vk::BlendFactor::ZERO,
             color_blend_op: vk::BlendOp::ADD,
@@ -757,7 +935,7 @@ impl VkRenderDevice
         (graphics_pipelines[0], pipeline_layout)
     }
 
-    fn create_shader_module(device: &ash::Device, code: &Vec<u8>) -> vk::ShaderModule {
+    fn create_shader_module(device: &ash::Device, code: Vec<u8>) -> vk::ShaderModule {
         let shader_module_create_indo = vk::ShaderModuleCreateInfo {
             s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
             p_next: ptr::null(),
@@ -784,18 +962,36 @@ impl VkRenderDevice
         bytes_code
     }
 
-    pub fn drop(&self) {
+    fn cleanup_swapchain_resources(&self) {
         unsafe {
             self.device
-                .destroy_pipeline_layout(self.pipeline_layout, None);
+                .free_command_buffers(self.command_pool, &self.command_buffers);
 
-            self.device
-                .destroy_render_pass(self.render_pass, None);
-            for &image_view in self.swapchain_image_views.iter() {
-                self.device.destroy_image_view(image_view, None);
+            self.swapchain.cleanup_swapchain(&self.device);
+
+            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+
+            self.device.destroy_render_pass(self.render_pass, None);
+
+            self.device.destroy_pipeline(self.graphics_pipeline, None);        
+
+            self.swapchain.destroy_swapchain();
+        };
+    }
+
+    pub fn drop(&self) {
+        unsafe {
+            for i in 0..global_constants::MAX_FRAMES_IN_FLIGHT {
+                self.device
+                    .destroy_semaphore(self.sync_objects.image_available_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.sync_objects.render_finished_semaphores[i], None);
+                self.device.destroy_fence(self.sync_objects.inflight_fences[i], None);
             }
 
-            self.swapchain.drop();
+            self.cleanup_swapchain_resources();
+
+            self.device.destroy_command_pool(self.command_pool, None);
 
             self.device.destroy_device(None);
             self.surface.surface_loader.destroy_surface(self.surface.surface, None);
@@ -813,4 +1009,7 @@ impl VkRenderDevice
 pub struct VkSurface {
     pub surface_loader: ash::extensions::khr::Surface,
     pub surface: vk::SurfaceKHR,
+
+    pub screen_width: u32,
+    pub screen_height: u32,
 }
