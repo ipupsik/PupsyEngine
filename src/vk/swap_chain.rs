@@ -17,13 +17,16 @@ use crate::utility::tools;
 use crate::vk::render_device;
 use crate::rhi::window;
 
+use super::render_device::VkSurface;
+
 pub struct VkSpawChain {
     swapchain_loader: ash::extensions::khr::Swapchain,
     swapchain: vk::SwapchainKHR,
 
     swapchain_images: Vec<vk::Image>,
-    swapchain_format: vk::Format,
-    swapchain_extent: vk::Extent2D,
+    pub swapchain_format: vk::Format,
+    pub swapchain_extent: vk::Extent2D,
+    swapchain_image_views: Vec<vk::ImageView>,
 }
 
 pub struct SwapChainSupportDetail {
@@ -103,12 +106,53 @@ impl VkSpawChain {
         };
 
         VkSpawChain {
-            swapchain_loader,
-            swapchain,
+            swapchain_loader: swapchain_loader,
+            swapchain: swapchain,
             swapchain_format: surface_format.format,
             swapchain_extent: extent,
-            swapchain_images,
+            swapchain_images: swapchain_images,
+            swapchain_image_views: vec![],
         }
+    }
+
+    pub fn create_image_views(&self,
+        device: &ash::Device
+    ) -> Vec<vk::ImageView> {
+        let mut swapchain_imageviews = vec![];
+
+        for &image in self.swapchain_images.iter() {
+            let image_view_create_info = vk::ImageViewCreateInfo {
+                s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::ImageViewCreateFlags::empty(),
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: self.swapchain_format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image,
+            };
+
+            let image_view = unsafe {
+                device
+                .create_image_view(&image_view_create_info, None)
+                .expect("Failet to create image view")
+            };
+
+            swapchain_imageviews.push(image_view);
+        }
+
+        swapchain_imageviews
     }
 
     pub fn query_swapchain_support(
@@ -189,6 +233,12 @@ impl VkSpawChain {
                     capabilities.max_image_extent.height,
                 ),
             }
+        }
+    }
+
+    pub fn drop(&self) {
+        unsafe {
+            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
         }
     }
 }
