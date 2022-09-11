@@ -9,7 +9,10 @@ edition = "2021"
 winit = "0.26.0"
 image = "0.23"
 num = "0.2"
-ash = "0.37.0"
+memoffset = "0.5.1"
+ash = { version = "0.37", default-features = false, features = ["debug", "linked"] }
+imgui-winit-support = { version = "^0.8", default-features = false, features = ["winit-26"] }
+imgui = { version = "^0.8", features = ["tables-api"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3.5", features = ["windef", "libloaderapi"] }

@@ -27,8 +27,8 @@ pub struct VkSpawChain {
     pub swapchain_format: vk::Format,
     pub swapchain_extent: vk::Extent2D,
 
-    swapchain_image_views:  Vec<vk::ImageView>,
-    swapchain_framebuffers: Vec<vk::Framebuffer>,
+    pub swapchain_image_views:  Vec<vk::ImageView>,
+    pub swapchain_framebuffers: Vec<vk::Framebuffer>,
 }
 
 pub struct SwapChainSupportDetail {

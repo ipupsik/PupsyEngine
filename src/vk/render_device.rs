@@ -9,6 +9,8 @@ use std::collections::HashSet;
 
 use std::os::raw::c_char;
 
+use crate::core::vertex::AttributeDescriptions;
+use crate::core::vertex::BindingDescriptions;
 use crate::vk::constants;
 use crate::utility::constants as global_constants;
 use crate::vk::platforms;
@@ -22,6 +24,8 @@ use crate::vk::swap_chain;
 
 use super::swap_chain::VkSpawChain;
 
+use crate::core::vertex::{Vertex};
+
 pub struct QueueFamilyIndices {
     pub graphics_family: Option<u32>,
     pub present_family: Option<u32>,
@@ -32,6 +36,21 @@ pub struct SyncObjects {
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub inflight_fences: Vec<vk::Fence>,
 }
+
+const VERTICES_DATA: [Vertex; 3] = [
+    Vertex {
+        pos: [0.0, -0.5],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        pos: [0.5, 0.5],
+        color: [1.0, 1.0, 0.0],
+    },
+    Vertex {
+        pos: [-0.5, 0.5],
+        color: [1.0, 0.0, 1.0],
+    },
+];
 
 impl QueueFamilyIndices {
     pub fn new() -> QueueFamilyIndices {
@@ -64,11 +83,14 @@ pub struct VkRenderDevice {
 
     pub swapchain: swap_chain::VkSpawChain,
 
-    render_pass: vk::RenderPass,
-    pipeline_layout: vk::PipelineLayout,
-    graphics_pipeline: vk::Pipeline,
+    pub render_pass: vk::RenderPass,
+    pub pipeline_layout: vk::PipelineLayout,
+    pub graphics_pipeline: vk::Pipeline,
     
-    command_pool: vk::CommandPool,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
+
+    pub command_pool: vk::CommandPool,
     pub command_buffers: Vec<vk::CommandBuffer>,
 
     pub sync_objects: SyncObjects,
@@ -83,7 +105,7 @@ impl VkRenderDevice
 {
     pub fn new (window: &window::Window) -> VkRenderDevice {
         let entry = unsafe {
-            ash::Entry::load().unwrap()
+            ash::Entry::linked()
         };
         let instance = VkRenderDevice::create_instance(&entry);
         let (debug_units_loader, debug_messager) = debug::setup_debug_utils(&entry, &instance);
@@ -108,6 +130,10 @@ impl VkRenderDevice
         let framebuffers = VkSpawChain::create_framebuffers(&logical_device, render_pass, &swapchain_image_views, &swap_chain.swapchain_extent);
 
         let command_pool = VkRenderDevice::create_command_pool(&logical_device, &indices);
+
+        let (vertex_buffer, vertex_buffer_memory) =
+        VkRenderDevice::create_vertex_buffer(&instance, &logical_device, physical_device);
+
         let command_buffers = VkRenderDevice::create_command_buffers(
             &logical_device,
             command_pool,
@@ -115,6 +141,7 @@ impl VkRenderDevice
             &framebuffers,
             render_pass,
             swap_chain.swapchain_extent,
+            vertex_buffer,
         );
 
         let sync_ojbects = VkRenderDevice::create_sync_objects(&logical_device);
@@ -138,12 +165,99 @@ impl VkRenderDevice
             pipeline_layout: pipeline_layout,
             graphics_pipeline: pipeline,
 
+            vertex_buffer: vertex_buffer,
+            vertex_buffer_memory: vertex_buffer_memory,
+
             command_pool: command_pool,
             command_buffers: command_buffers,
 
             sync_objects: sync_ojbects,
             current_frame: 0
         }
+    }
+
+    fn create_vertex_buffer(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+    ) -> (vk::Buffer, vk::DeviceMemory) {
+        let vertex_buffer_create_info = vk::BufferCreateInfo {
+            s_type: vk::StructureType::BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::BufferCreateFlags::empty(),
+            size: std::mem::size_of_val(&VERTICES_DATA) as u64,
+            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+        };
+
+        let vertex_buffer = unsafe {
+            device
+                .create_buffer(&vertex_buffer_create_info, None)
+                .expect("Failed to create Vertex Buffer")
+        };
+
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
+        let mem_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        let required_memory_flags: vk::MemoryPropertyFlags =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_type = VkRenderDevice::find_memory_type(
+            mem_requirements.memory_type_bits,
+            required_memory_flags,
+            mem_properties,
+        );
+
+        let allocate_info = vk::MemoryAllocateInfo {
+            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            allocation_size: mem_requirements.size,
+            memory_type_index: memory_type,
+        };
+
+        let vertex_buffer_memory = unsafe {
+            device
+                .allocate_memory(&allocate_info, None)
+                .expect("Failed to allocate vertex buffer memory!")
+        };
+
+        unsafe {
+            device
+                .bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
+                .expect("Failed to bind Buffer");
+
+            let data_ptr = device
+                .map_memory(
+                    vertex_buffer_memory,
+                    0,
+                    vertex_buffer_create_info.size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .expect("Failed to Map Memory") as *mut Vertex;
+
+            data_ptr.copy_from_nonoverlapping(VERTICES_DATA.as_ptr(), VERTICES_DATA.len());
+
+            device.unmap_memory(vertex_buffer_memory);
+        }
+
+        (vertex_buffer, vertex_buffer_memory)
+    }
+
+    fn find_memory_type(
+        type_filter: u32,
+        required_properties: vk::MemoryPropertyFlags,
+        mem_properties: vk::PhysicalDeviceMemoryProperties,
+    ) -> u32 {
+        for (i, memory_type) in mem_properties.memory_types.iter().enumerate() {
+            if (type_filter & (1 << i)) > 0
+                && memory_type.property_flags.contains(required_properties)
+            {
+                return i as u32;
+            }
+        }
+
+        panic!("Failed to find suitable memory type!")
     }
 
     pub fn recreate_swapchain(&mut self) {
@@ -172,6 +286,7 @@ impl VkRenderDevice
             &framebuffers,
             self.render_pass,
             self.swapchain.swapchain_extent,
+            self.vertex_buffer
         );
     }
 
@@ -580,13 +695,14 @@ impl VkRenderDevice
         }
     }
 
-    fn create_command_buffers (
+    pub fn create_command_buffers (
         device: &ash::Device,
         command_pool: vk::CommandPool,
         graphics_pipeline: vk::Pipeline,
         framebuffers: &Vec<vk::Framebuffer>,
         render_pass: vk::RenderPass,
         surface_extent: vk::Extent2D,
+        vertex_buffer: vk::Buffer
     ) -> Vec<vk::CommandBuffer> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
@@ -646,7 +762,13 @@ impl VkRenderDevice
                     vk::PipelineBindPoint::GRAPHICS,
                     graphics_pipeline,
                 );
-                device.cmd_draw(command_buffer, 3, 1, 0, 0);
+
+                let vertex_buffers = [vertex_buffer];
+                let offsets = [0_u64];
+
+                device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+
+                device.cmd_draw(command_buffer, VERTICES_DATA.len() as u32, 1, 0, 0);
 
                 device.cmd_end_render_pass(command_buffer);
 
@@ -720,9 +842,9 @@ impl VkRenderDevice
         swap_chain: &VkSpawChain,
         render_pass: vk::RenderPass
     ) -> (vk::Pipeline, vk::PipelineLayout) {
-        let vertex_shader_code = VkRenderDevice::read_shader_code(Path::new("src/shaders/spv/09-shader-base.vert.spv"));
+        let vertex_shader_code = VkRenderDevice::read_shader_code(Path::new("shaders/spv/17-shader-vertexbuffer.vert.spv"));
 
-        let fragment_shader_code = VkRenderDevice::read_shader_code(Path::new("src/shaders/spv/09-shader-base.frag.spv"));
+        let fragment_shader_code = VkRenderDevice::read_shader_code(Path::new("shaders/spv/17-shader-vertexbuffer.frag.spv"));
 
         let vert_shader_module = VkRenderDevice::create_shader_module(
             device,
@@ -756,14 +878,17 @@ impl VkRenderDevice
             },
         ];
 
+        let binding_description = Vertex::get_binding_descriptions();
+        let attribute_description = Vertex::get_attribute_descriptions();
+
         let vertex_input_state_create_info = vk::PipelineVertexInputStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineVertexInputStateCreateFlags::empty(),
-            vertex_attribute_description_count: 0,
-            p_vertex_attribute_descriptions: ptr::null(),
-            vertex_binding_description_count: 0,
-            p_vertex_binding_descriptions: ptr::null(),
+            vertex_attribute_description_count: attribute_description.len() as u32,
+            p_vertex_attribute_descriptions: attribute_description.as_ptr(),
+            vertex_binding_description_count: binding_description.len() as u32,
+            p_vertex_binding_descriptions: binding_description.as_ptr(),
         };
 
         let vertex_input_assembly_state_create_info = vk::PipelineInputAssemblyStateCreateInfo {

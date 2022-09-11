@@ -1,3 +1,6 @@
+use imgui::Context;
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
+
 use winit::event::{Event, VirtualKeyCode, ElementState, KeyboardInput, WindowEvent};
 use winit::event_loop::{EventLoop, ControlFlow};
 

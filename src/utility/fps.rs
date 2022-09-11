@@ -1,5 +1,5 @@
 pub struct FPSManager {
-    delta_time: u128,
+    pub delta_time: u128,
     fps: f32,
 
     last_time: u128,

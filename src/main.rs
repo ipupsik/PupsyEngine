@@ -1,3 +1,5 @@
+use pupsy_engine::imgui;
+
 use winit::event::{Event, VirtualKeyCode, ElementState, KeyboardInput, WindowEvent};
 use winit::event_loop::{EventLoop, ControlFlow};
 
@@ -8,27 +10,33 @@ use pupsy_engine::utility::fps;
 use pupsy_engine::utility::constants as global_constants;
 use pupsy_engine::rhi::window;
 use pupsy_engine::rhi;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 use pupsy_engine::vk::render_device as vk_render;
+use pupsy_engine::imgui::constants as imgui_constants;
 
 struct PupsyEngine {
     render_device: vk_render::VkRenderDevice,
     window: window::Window,
     fps_manager: fps::FPSManager,
 
+    ui_engine: imgui::pupsy_ui_engine::PupsyUiEngine,
+
     is_marked_resized: bool,
 }
 
 impl PupsyEngine {
-    pub fn new(window: window::Window) -> PupsyEngine {
+    pub fn new(
+        window: window::Window) -> PupsyEngine {
         let render_device = vk_render::VkRenderDevice::new(&window);
+        let pupsy_ui_engine = imgui::pupsy_ui_engine::PupsyUiEngine::new(&window);
 
         PupsyEngine {
              render_device: render_device,
              window: window,
              is_marked_resized: false,
-             fps_manager: fps::FPSManager::new()
+             fps_manager: fps::FPSManager::new(),
+             ui_engine: pupsy_ui_engine,
         }
     }
 
@@ -69,6 +77,16 @@ impl PupsyEngine {
 
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
 
+        let draw_ui_data = self.ui_engine.render(&self.window, &self.render_device.command_buffers[image_index as usize]);
+
+        // vk_render::VkRenderDevice::create_command_buffers(
+        //     &self.render_device.device,
+        //     self.render_device.command_pool,
+        //     self.render_device.graphics_pipeline,
+        //     &self.render_device.swapchain.swapchain_framebuffers,
+        //     self.render_device.render_pass,
+        //     self.render_device.swapchain.swapchain_extent);
+
         let submit_infos = [vk::SubmitInfo {
             s_type: vk::StructureType::SUBMIT_INFO,
             p_next: ptr::null(),
@@ -108,8 +126,6 @@ impl PupsyEngine {
             p_results: ptr::null_mut(),
         };
 
-
-
         let present_result = unsafe {
             self.render_device.swapchain.swapchain_loader
                 .queue_present(self.render_device.present_queue, &present_info)
@@ -138,6 +154,9 @@ impl PupsyEngine {
 
         event_loop.run(move |event, _, control_flow| {
             match event {
+                | Event::NewEvents(_) => {
+                    self.ui_engine.imgui.io_mut().update_delta_time(Duration::from_micros(self.fps_manager.delta_time as u64));
+                }
                 | Event::WindowEvent { event, .. } => {
                     match event {
                         | WindowEvent::CloseRequested => {
@@ -185,10 +204,10 @@ impl Drop for PupsyEngine {
 }
 
 fn main() {
-
     let event_loop = EventLoop::new();
     let window = rhi::window::Window::new(&event_loop);
 
     let engine = PupsyEngine::new(window);
+
     engine.main_loop(event_loop);
 }

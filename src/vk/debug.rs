@@ -1,13 +1,7 @@
-use winit::event::{Event, VirtualKeyCode, ElementState, KeyboardInput, WindowEvent};
-use winit::event_loop::{EventLoop, ControlFlow};
-
 use ash::vk;
-use std::ffi::CString;
-use std::marker::PhantomData;
 use std::ptr;
 
 use crate::vk::constants;
-use crate::vk::platforms;
 use crate::utility::debug;
 use crate::utility::tools;
 
