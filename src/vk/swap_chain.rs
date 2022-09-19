@@ -23,7 +23,7 @@ pub struct VkSpawChain {
     pub swapchain_loader: ash::extensions::khr::Swapchain,
     pub swapchain: vk::SwapchainKHR,
 
-    swapchain_images: Vec<vk::Image>,
+    pub swapchain_images: Vec<vk::Image>,
     pub swapchain_format: vk::Format,
     pub swapchain_extent: vk::Extent2D,
 

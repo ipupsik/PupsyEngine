@@ -72,6 +72,8 @@ impl PupsyEngine {
                 }
         };
 
+        self.render_device.update_uniform_buffer(image_index as usize, self.fps_manager.delta_time as f32);
+
         let image_available_semaphore = [self.render_device.sync_objects.image_available_semaphores[self.render_device.current_frame]];
         let render_finished_semaphore = [self.render_device.sync_objects.render_finished_semaphores[self.render_device.current_frame]];
 
