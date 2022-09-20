@@ -20,17 +20,17 @@
     * get_physical_device_queue_family_properties (получаем все доступные queue_families)
     * get_physical_device_features (получаем список всеъ фич карточки)
 
-### 4. Создаем Device (logical device)
+### 4. Создаем GraphicsQueue / PresentQueue
+![queue_families](/assets/doc/img/queue_families_example.png)
+### 5. Создаем Device (logical device)
 * Создаем DeviceQueueCreateInfo
 * Создаем DeviceCreateInfo
 * Создаем Device
-### 5. Создаем GraphicsQueue
-### 6. Создаем PresentQueue
-### 7. Создаем Swapchain
+### 6. Создаем Swapchain
 * Создаем SwapchainCreateInfoKHR
 * Создаем SwapchainLoader
 * SwapchainLoadr.create_swapchain
-### 8. Создаем PipelineLayout
+### 7. Создаем PipelineLayout
 * Создаем Shader Modules
     * Читаем байткод из скомпилированного шейдера
     * Создаем ShaderModuleCreateInfo
@@ -50,3 +50,8 @@
         * AttachmentDescription (Определяем поведение отображение во framebuffer после прохождния треугольника через пайплайн ())
         * Subpasses and Attachment references ()
             * SubpassDescription / AttachmentReference ()
+
+## Render thread
+
+### Update
+    * 

@@ -24,6 +24,6 @@ impl FPSManager {
             self.last_time = new_time;
         }
 
-        println!("FPS: {}", self.fps);
+        //println!("FPS: {}", self.fps);
     } 
 }

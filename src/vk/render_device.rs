@@ -138,7 +138,7 @@ impl VkRenderDevice
         let (debug_units_loader, debug_messager) = debug::setup_debug_utils(&entry, &instance);
         let surface = VkRenderDevice::create_surface(&entry, &instance, window);
         let physical_device = VkRenderDevice::pick_physical_device(&instance, &surface);
-        let (device, indices) = VkRenderDevice::create_logical_device(&instance, physical_device, &constants::VALIDATION, &surface);
+        let (device, indices) = VkRenderDevice::create_device(&instance, physical_device, &constants::VALIDATION, &surface);
         
         let graphics_queue = unsafe { 
             device.get_device_queue(indices.graphics_family.unwrap(), 0)
@@ -1039,7 +1039,7 @@ impl VkRenderDevice
         queue_family_indices
     }
 
-    pub fn create_logical_device(
+    pub fn create_device(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
         validation: &debug::ValidationInfo,
@@ -1495,7 +1495,7 @@ impl VkRenderDevice
             p_color_blend_state: &color_blend_state,
             p_dynamic_state: ptr::null(),
             layout: pipeline_layout,
-            render_pass,
+            render_pass: render_pass,
             subpass: 0,
             base_pipeline_handle: vk::Pipeline::null(),
             base_pipeline_index: -1,
